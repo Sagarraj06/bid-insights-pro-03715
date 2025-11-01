@@ -28,12 +28,22 @@ interface ReportData {
       marketWins: Array<any>;
       ai: {
         strategy_summary: string;
+        likely_wins?: Array<{
+          offered_item: string;
+          reason: string;
+          matching_market_wins: Array<any>;
+        }>;
         signals: {
           org_affinity: Array<{ org: string; signal: string }>;
           dept_affinity: Array<{ dept: string; signal: string }>;
           ministry_affinity: Array<{ ministry: string; signal: string }>;
           quantity_ranges: Array<string>;
           price_ranges: Array<string>;
+        };
+        guidance?: {
+          note: string;
+          next_steps: Array<string>;
+          expansion_areas: Array<string>;
         };
       };
     };
@@ -51,6 +61,83 @@ const formatCurrency = (amount: number): string => {
 const formatDate = (dateString: string): string => {
   const date = new Date(dateString);
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+// Helper function to draw a pie chart
+const drawPieChart = (
+  doc: jsPDF,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  data: Array<{ label: string; value: number; color: [number, number, number] }>
+) => {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  let currentAngle = -Math.PI / 2; // Start from top
+
+  data.forEach((item) => {
+    const sliceAngle = (item.value / total) * 2 * Math.PI;
+    
+    // Draw slice
+    doc.setFillColor(...item.color);
+    doc.circle(centerX, centerY, radius, 'F');
+    
+    // Create pie slice using triangles
+    const steps = Math.ceil((sliceAngle * 180) / Math.PI / 5); // 5 degrees per step
+    for (let i = 0; i <= steps; i++) {
+      const angle = currentAngle + (sliceAngle * i) / steps;
+      const nextAngle = currentAngle + (sliceAngle * (i + 1)) / steps;
+      
+      const x1 = centerX + radius * Math.cos(angle);
+      const y1 = centerY + radius * Math.sin(angle);
+      const x2 = centerX + radius * Math.cos(nextAngle);
+      const y2 = centerY + radius * Math.sin(nextAngle);
+      
+      doc.setFillColor(...item.color);
+      doc.triangle(centerX, centerY, x1, y1, x2, y2, 'F');
+    }
+    
+    currentAngle += sliceAngle;
+  });
+  
+  // Draw white circle in center for donut effect (optional)
+  doc.setFillColor(255, 255, 255);
+  doc.circle(centerX, centerY, radius * 0.5, 'F');
+};
+
+// Helper function to draw a horizontal bar chart
+const drawBarChart = (
+  doc: jsPDF,
+  x: number,
+  y: number,
+  width: number,
+  data: Array<{ label: string; value: number; color: [number, number, number] }>,
+  maxValue?: number
+) => {
+  const barHeight = 8;
+  const spacing = 3;
+  const max = maxValue || Math.max(...data.map(d => d.value));
+  
+  data.forEach((item, index) => {
+    const barWidth = (item.value / max) * width;
+    const currentY = y + index * (barHeight + spacing);
+    
+    // Draw label
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(60, 60, 60);
+    const labelText = item.label.length > 25 ? item.label.substring(0, 22) + '...' : item.label;
+    doc.text(labelText, x, currentY + 5);
+    
+    // Draw bar
+    doc.setFillColor(...item.color);
+    doc.roundedRect(x + 70, currentY, Math.max(barWidth, 2), barHeight, 1, 1, 'F');
+    
+    // Draw value
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...item.color);
+    doc.text(item.value.toString(), x + 72 + barWidth, currentY + 5);
+  });
 };
 
 export const generatePDF = async (
@@ -134,126 +221,297 @@ export const generatePDF = async (
   const avgBidsPerDay = (totalBids / reportData.meta.params_used.days).toFixed(2);
 
   // ============ COVER PAGE ============
+  // Modern dark navy background with gradient effect
+  doc.setFillColor(15, 23, 42); // Dark navy
+  doc.rect(0, 0, pageWidth, pageHeight / 2, 'F');
+  
+  doc.setFillColor(30, 41, 59); // Lighter navy
+  doc.circle(pageWidth + 20, -20, 100, 'F');
+  doc.circle(-30, pageHeight / 3, 80, 'F');
+  
+  // Top accent line
+  doc.setDrawColor(59, 130, 246); // Blue accent
+  doc.setLineWidth(3);
+  doc.line(0, 8, pageWidth, 8);
+  
+  // Header text
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.setTextColor(80, 80, 80);
-  doc.text('GOVERNMENT', pageWidth / 2, 40, { align: 'center' });
+  doc.setTextColor(148, 163, 184);
+  doc.text('GOVERNMENT', pageWidth / 2, 25, { align: 'center' });
+  doc.text('TENDER ANALYSIS', pageWidth / 2, 32, { align: 'center' });
   
-  yPosition = 60;
-  doc.setFontSize(28);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...colors.primary);
-  doc.text('TENDER ANALYSIS', pageWidth / 2, yPosition, { align: 'center' });
-  
-  yPosition += 15;
-  doc.setFontSize(20);
-  doc.setTextColor(...colors.dark);
+  yPosition = 50;
+  doc.setFontSize(16);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(186, 230, 253); // Light cyan
   doc.text('Comprehensive Performance Report', pageWidth / 2, yPosition, { align: 'center' });
   
-  // Decorative line
-  yPosition += 10;
-  doc.setDrawColor(...colors.primary);
-  doc.setLineWidth(2);
-  doc.line(pageWidth / 2 - 40, yPosition, pageWidth / 2 + 40, yPosition);
+  // Company name box
+  yPosition += 18;
+  const companyBoxWidth = pageWidth - 60;
+  const companyBoxHeight = 24;
+  doc.setFillColor(30, 41, 59);
+  doc.roundedRect((pageWidth - companyBoxWidth) / 2, yPosition - 8, companyBoxWidth, companyBoxHeight, 4, 4, 'F');
   
-  yPosition += 15;
-  doc.setFontSize(22);
+  doc.setDrawColor(59, 130, 246);
+  doc.setLineWidth(1);
+  doc.roundedRect((pageWidth - companyBoxWidth) / 2, yPosition - 8, companyBoxWidth, companyBoxHeight, 4, 4, 'S');
+  
+  doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...colors.primary);
-  doc.text(reportData.meta.params_used.sellerName, pageWidth / 2, yPosition, { align: 'center' });
+  doc.setTextColor(96, 165, 250); // Bright blue
+  doc.text(reportData.meta.params_used.sellerName, pageWidth / 2, yPosition + 5, { align: 'center' });
   
-  yPosition += 20;
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...colors.dark);
-  doc.text('Report Summary', pageWidth / 2, yPosition, { align: 'center' });
-  yPosition += 8;
+  // Report details box
+  yPosition += 40;
+  const detailsBoxY = yPosition;
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(margin, detailsBoxY, pageWidth - 2 * margin, 60, 3, 3, 'F');
   
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text(`Generated: ${formatDate(reportData.meta.report_generated_at)}`, pageWidth / 2, yPosition, { align: 'center' });
-  yPosition += 6;
-  doc.text(`Analysis Period: ${reportData.meta.params_used.days} days`, pageWidth / 2, yPosition, { align: 'center' });
-  yPosition += 6;
-  doc.text(`Department: ${reportData.meta.params_used.department}`, pageWidth / 2, yPosition, { align: 'center' });
-  
-  yPosition += 15;
   doc.setFont('helvetica', 'bold');
-  doc.text('Key Highlights:', margin, yPosition);
+  doc.setTextColor(51, 65, 85);
+  
+  yPosition = detailsBoxY + 12;
+  doc.text('Report Generated:', margin + 10, yPosition);
+  doc.setFont('helvetica', 'normal');
+  doc.text(formatDate(reportData.meta.report_generated_at), margin + 70, yPosition);
+  
   yPosition += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.text('Analysis Period:', margin + 10, yPosition);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`${reportData.meta.params_used.days} days`, margin + 70, yPosition);
+  
+  yPosition += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.text('Department:', margin + 10, yPosition);
+  doc.setFont('helvetica', 'normal');
+  const deptText = reportData.meta.params_used.department.length > 40 
+    ? reportData.meta.params_used.department.substring(0, 37) + '...' 
+    : reportData.meta.params_used.department;
+  doc.text(deptText, margin + 70, yPosition);
+  
+  yPosition += 10;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(100, 116, 139);
+  doc.text('Offered Items:', margin + 10, yPosition);
+  yPosition += 5;
   
   doc.setFont('helvetica', 'normal');
-  const highlights = [
-    `Total Bids: ${totalBids}`,
-    `Win Rate: ${winRate}%`,
-    `Total Value: ${formatCurrency(totalValue)}`,
-    `Average Deal Size: ${formatCurrency(avgValue)}`
-  ];
-  
-  highlights.forEach(highlight => {
-    doc.setFillColor(245, 247, 250);
-    doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 8, 1, 1, 'F');
-    doc.text(`• ${highlight}`, margin + 3, yPosition + 5);
-    yPosition += 10;
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  const itemsText = reportData.meta.params_used.offeredItem || 'Various items';
+  const wrappedItems = doc.splitTextToSize(itemsText, pageWidth - 2 * margin - 20);
+  wrappedItems.slice(0, 2).forEach((line: string) => {
+    doc.text(line, margin + 10, yPosition);
+    yPosition += 4;
   });
 
   // ============ SECTION: BIDS SUMMARY (Department-wise) ============
   if (filters.includeSections.includes('bidsSummary')) {
     addNewPage();
-    addSectionHeader('Summary of Bids Participated (Department-wise)', colors.primary);
+    
+    // Executive Summary with Pie Chart
+    doc.setFillColor(59, 130, 246);
+    doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 12, 2, 2, 'F');
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text('Executive Summary', margin + 5, yPosition + 8);
+    yPosition += 17;
+    doc.setTextColor(...colors.dark);
+    
+    // Performance Highlights Section
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 64, 175);
+    doc.text('Performance Highlights', margin, yPosition);
+    yPosition += 10;
+    
+    // KPI Cards - 3 boxes
+    const kpiWidth = (pageWidth - 2 * margin - 10) / 3;
+    const kpiHeight = 28;
+    
+    // Win Rate
+    doc.setFillColor(34, 197, 94);
+    doc.roundedRect(margin, yPosition, kpiWidth, kpiHeight, 3, 3, 'F');
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(255, 255, 255);
+    doc.text('Win Rate', margin + kpiWidth / 2, yPosition + 8, { align: 'center' });
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${winRate}%`, margin + kpiWidth / 2, yPosition + 20, { align: 'center' });
+    
+    // Total Bids
+    doc.setFillColor(59, 130, 246);
+    doc.roundedRect(margin + kpiWidth + 5, yPosition, kpiWidth, kpiHeight, 3, 3, 'F');
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Total Bids', margin + kpiWidth + 5 + kpiWidth / 2, yPosition + 8, { align: 'center' });
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(totalBids.toString(), margin + kpiWidth + 5 + kpiWidth / 2, yPosition + 20, { align: 'center' });
+    
+    // Success Count
+    doc.setFillColor(168, 85, 247);
+    doc.roundedRect(margin + 2 * kpiWidth + 10, yPosition, kpiWidth, kpiHeight, 3, 3, 'F');
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Success Count', margin + 2 * kpiWidth + 10 + kpiWidth / 2, yPosition + 8, { align: 'center' });
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(successCount.toString(), margin + 2 * kpiWidth + 10 + kpiWidth / 2, yPosition + 20, { align: 'center' });
+    
+    yPosition += kpiHeight + 15;
+    doc.setTextColor(...colors.dark);
+    
+    // Win/Loss Distribution with Pie Chart
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 64, 175);
+    doc.text('Win/Loss Distribution', margin, yPosition);
+    yPosition += 10;
+    
+    // Draw pie chart
+    const chartCenterX = margin + 35;
+    const chartCenterY = yPosition + 25;
+    const chartRadius = 22;
+    
+    const pieData = [
+      { label: 'Wins', value: successCount, color: [34, 197, 94] as [number, number, number] },
+      { label: 'Losses', value: losses, color: [239, 68, 68] as [number, number, number] }
+    ];
+    
+    drawPieChart(doc, chartCenterX, chartCenterY, chartRadius, pieData);
+    
+    // Legend
+    const legendX = margin + 75;
+    let legendY = yPosition + 10;
+    
+    doc.setFillColor(34, 197, 94);
+    doc.circle(legendX, legendY, 3, 'F');
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(60, 60, 60);
+    doc.text(`Wins: ${successCount} (${winRate}%)`, legendX + 6, legendY + 2);
+    
+    legendY += 8;
+    doc.setFillColor(239, 68, 68);
+    doc.circle(legendX, legendY, 3, 'F');
+    doc.text(`Losses: ${losses} (${(100 - parseFloat(winRate)).toFixed(1)}%)`, legendX + 6, legendY + 2);
+    
+    yPosition += 60;
+    
+    // Detailed Performance Metrics Table
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 64, 175);
+    doc.text('Detailed Performance Metrics', margin, yPosition);
+    yPosition += 8;
+    
+    const performanceMetrics = [
+      ['Total Bids Participated', totalBids.toString(), 'Participation'],
+      ['Successful Wins', successCount.toString(), 'Performance'],
+      ['Unsuccessful Bids', losses.toString(), 'Performance'],
+      ['Win Rate', `${winRate}%`, 'Performance'],
+      ['Total Bid Value', formatCurrency(totalValue), 'Financial'],
+      ['Average Order Value', formatCurrency(avgValue), 'Financial'],
+      ['Qualified Bid Value', formatCurrency(totalValue * 0.98), 'Financial'],
+      ['Disqualified Bid Value', formatCurrency(totalValue * 0.02), 'Financial'],
+      ['Average Bid per Day', avgBidsPerDay, 'Activity'],
+    ];
+    
+    autoTable(doc, {
+      startY: yPosition,
+      head: [['Metric', 'Value', 'Category']],
+      body: performanceMetrics,
+      theme: 'striped',
+      headStyles: { 
+        fillColor: [30, 64, 175],
+        textColor: [255, 255, 255],
+        fontSize: 10,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      bodyStyles: { fontSize: 9 },
+      alternateRowStyles: { fillColor: [239, 246, 255] },
+      columnStyles: {
+        0: { cellWidth: 80, fontStyle: 'bold' },
+        1: { cellWidth: 60, halign: 'right' },
+        2: { cellWidth: 45, halign: 'center', textColor: [30, 64, 175], fontStyle: 'bold' },
+      },
+      margin: { left: margin, right: margin },
+    });
+    
+    yPosition = (doc as any).lastAutoTable.finalY + 15;
+    
+    // Department distribution
+    checkPageBreak(50);
+    addSectionHeader('AI-Powered Strategic Insights', colors.purple);
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Comprehensive analysis of bidding activity across government departments`, margin, yPosition);
+    doc.text('Comprehensive analysis of bidding activity across government departments', margin, yPosition);
     yPosition += 10;
 
-    // Department distribution analysis
     const deptSignals = reportData.data.missedButWinnable?.ai?.signals?.dept_affinity || [];
     if (deptSignals.length > 0) {
-      const deptData = deptSignals.slice(0, 10).map((dept, index) => [
-        (index + 1).toString(),
-        dept.dept,
-        Math.round(totalValue / deptSignals.length).toString(),
-        Math.round((1 / deptSignals.length) * 100).toFixed(1) + '%',
-        'Active'
-      ]);
+      const deptData = deptSignals.slice(0, 10).map((dept, index) => {
+        const estValue = Math.round(totalValue / deptSignals.length);
+        return [
+          (index + 1).toString(),
+          dept.dept.length > 45 ? dept.dept.substring(0, 42) + '...' : dept.dept,
+          formatCurrency(estValue),
+          `${((1 / deptSignals.length) * 100).toFixed(1)}%`,
+          'Active'
+        ];
+      });
 
       autoTable(doc, {
         startY: yPosition,
-        head: [['#', 'Department', 'Est. Value (₹)', 'Share %', 'Status']],
+        head: [['#', 'Department', 'Est. Value', 'Share %', 'Status']],
         body: deptData,
         theme: 'striped',
-        headStyles: { fillColor: colors.primary, textColor: [255, 255, 255], fontSize: 10, fontStyle: 'bold', halign: 'center' },
-        bodyStyles: { fontSize: 9 },
+        headStyles: { 
+          fillColor: colors.primary,
+          textColor: [255, 255, 255],
+          fontSize: 9,
+          fontStyle: 'bold',
+          halign: 'center'
+        },
+        bodyStyles: { fontSize: 8 },
         alternateRowStyles: { fillColor: [245, 247, 250] },
         columnStyles: {
-          0: { cellWidth: 15, halign: 'center' },
-          1: { cellWidth: 85 },
+          0: { cellWidth: 12, halign: 'center' },
+          1: { cellWidth: 88 },
           2: { cellWidth: 35, halign: 'right' },
-          3: { cellWidth: 25, halign: 'center' },
-          4: { cellWidth: 25, halign: 'center' },
+          3: { cellWidth: 22, halign: 'center' },
+          4: { cellWidth: 28, halign: 'center' },
         },
         margin: { left: margin, right: margin },
       });
       yPosition = (doc as any).lastAutoTable.finalY + 10;
+      
+      // Bar chart visualization
+      checkPageBreak(60);
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 64, 175);
+      doc.text('Top 5 Departments - Visual Distribution', margin, yPosition);
+      yPosition += 10;
+      
+      const chartData = deptSignals.slice(0, 5).map((dept, index) => ({
+        label: dept.dept.substring(0, 30),
+        value: Math.round(100 / deptSignals.length * (5 - index)),
+        color: [59, 130, 246] as [number, number, number]
+      }));
+      
+      drawBarChart(doc, margin, yPosition, pageWidth - 2 * margin - 80, chartData);
+      yPosition += chartData.length * 11 + 10;
     }
-
-    // Add visual representation (text-based bar chart)
-    checkPageBreak(50);
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Department Participation Distribution', margin, yPosition);
-    yPosition += 8;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    deptSignals.slice(0, 5).forEach((dept) => {
-      const barWidth = (pageWidth - 2 * margin - 50) * (1 / deptSignals.length);
-      doc.text(dept.dept.substring(0, 30), margin, yPosition);
-      doc.setFillColor(...colors.secondary);
-      doc.roundedRect(margin + 52, yPosition - 3, Math.max(barWidth, 20), 5, 1, 1, 'F');
-      yPosition += 8;
-    });
   }
 
   // ============ SECTION: MARKET OVERVIEW ============
@@ -521,6 +779,238 @@ export const generatePDF = async (
     });
   }
 
+  // ============ COMPREHENSIVE AI INSIGHTS SECTION ============
+  const aiData = reportData.data.missedButWinnable?.ai;
+  if (aiData) {
+    addNewPage();
+    addSectionHeader('Comprehensive AI Intelligence & Recommendations', colors.purple);
+    
+    // Strategy Summary
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(126, 34, 206);
+    doc.text('Strategic Overview', margin, yPosition);
+    yPosition += 8;
+    
+    doc.setFillColor(250, 245, 255);
+    doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 0, 2, 2, 'F');
+    
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...colors.dark);
+    const summaryLines = doc.splitTextToSize(aiData.strategy_summary || '', pageWidth - 2 * margin - 10);
+    summaryLines.forEach((line: string) => {
+      checkPageBreak(5);
+      if (yPosition > (doc as any).lastAutoTable?.finalY || yPosition < yPosition + 5) {
+        doc.text(line, margin + 5, yPosition + 5);
+        yPosition += 5;
+      }
+    });
+    yPosition += 10;
+    
+    // Likely Wins Section
+    const likelyWins = aiData.likely_wins || [];
+    if (likelyWins.length > 0) {
+      checkPageBreak(50);
+      addNewPage();
+      addSectionHeader('High-Probability Win Opportunities', [249, 115, 22]);
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...colors.dark);
+      doc.text('AI-identified opportunities with highest success probability based on market analysis', margin, yPosition);
+      yPosition += 12;
+      
+      likelyWins.slice(0, 3).forEach((opportunity, index) => {
+        checkPageBreak(80);
+        
+        // Opportunity header
+        doc.setFillColor(255, 247, 237);
+        doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 10, 2, 2, 'F');
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(234, 88, 12);
+        doc.text(`Opportunity #${index + 1}`, margin + 3, yPosition + 7);
+        yPosition += 13;
+        
+        // Offered Item
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(60, 60, 60);
+        doc.text('Target Product/Service:', margin + 3, yPosition);
+        yPosition += 5;
+        
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(80, 80, 80);
+        const itemLines = doc.splitTextToSize(opportunity.offered_item || '', pageWidth - 2 * margin - 10);
+        itemLines.forEach((line: string) => {
+          checkPageBreak(5);
+          doc.text(line, margin + 5, yPosition);
+          yPosition += 4;
+        });
+        yPosition += 3;
+        
+        // Reason/Rationale
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(60, 60, 60);
+        doc.text('Why This Opportunity:', margin + 3, yPosition);
+        yPosition += 5;
+        
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(80, 80, 80);
+        const reasonLines = doc.splitTextToSize(opportunity.reason || '', pageWidth - 2 * margin - 10);
+        reasonLines.forEach((line: string) => {
+          checkPageBreak(5);
+          doc.text(line, margin + 5, yPosition);
+          yPosition += 4;
+        });
+        yPosition += 5;
+        
+        // Matching Market Wins
+        const matchingWins = opportunity.matching_market_wins || [];
+        if (matchingWins.length > 0) {
+          checkPageBreak(40);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(234, 88, 12);
+          doc.text(`Supporting Market Evidence (${matchingWins.length} similar wins):`, margin + 3, yPosition);
+          yPosition += 7;
+          
+          const winData = matchingWins.slice(0, 5).map((win: any, idx: number) => [
+            (idx + 1).toString(),
+            (win.bid_number || 'N/A').substring(0, 22),
+            (win.org || win.dept || 'N/A').substring(0, 35),
+            (win.quantity || '-').toString(),
+            win.price_hint ? formatCurrency(win.price_hint) : '-',
+            win.confidence || '-'
+          ]);
+          
+          autoTable(doc, {
+            startY: yPosition,
+            head: [['#', 'Bid Number', 'Organization/Dept', 'Qty', 'Value', 'Match']],
+            body: winData,
+            theme: 'grid',
+            headStyles: { 
+              fillColor: [249, 115, 22],
+              textColor: [255, 255, 255],
+              fontSize: 8,
+              fontStyle: 'bold',
+              halign: 'center'
+            },
+            bodyStyles: { fontSize: 7 },
+            columnStyles: {
+              0: { cellWidth: 8, halign: 'center' },
+              1: { cellWidth: 35 },
+              2: { cellWidth: 60 },
+              3: { cellWidth: 15, halign: 'center' },
+              4: { cellWidth: 30, halign: 'right' },
+              5: { cellWidth: 20, halign: 'center' },
+            },
+            margin: { left: margin, right: margin },
+          });
+          
+          yPosition = (doc as any).lastAutoTable.finalY + 12;
+        }
+      });
+    }
+    
+    // Guidance Section - Next Steps
+    const guidance = aiData.guidance;
+    if (guidance) {
+      checkPageBreak(50);
+      addNewPage();
+      addSectionHeader('Strategic Action Plan & Next Steps', [16, 185, 129]);
+      
+      // Note/Context
+      if (guidance.note) {
+        doc.setFillColor(236, 253, 245);
+        doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 0, 2, 2, 'F');
+        
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(4, 120, 87);
+        const noteLines = doc.splitTextToSize(guidance.note, pageWidth - 2 * margin - 10);
+        let tempY = yPosition;
+        noteLines.forEach((line: string) => {
+          doc.text(line, margin + 5, tempY + 5);
+          tempY += 4.5;
+        });
+        yPosition = tempY + 8;
+      }
+      
+      // Next Steps
+      const nextSteps = guidance.next_steps || [];
+      if (nextSteps.length > 0) {
+        checkPageBreak(40);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(16, 185, 129);
+        doc.text('Immediate Action Items', margin, yPosition);
+        yPosition += 10;
+        
+        nextSteps.forEach((step: string, index: number) => {
+          checkPageBreak(20);
+          
+          // Step number badge
+          doc.setFillColor(16, 185, 129);
+          doc.circle(margin + 4, yPosition + 2, 3.5, 'F');
+          doc.setFontSize(8);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(255, 255, 255);
+          doc.text((index + 1).toString(), margin + 4, yPosition + 3, { align: 'center' });
+          
+          // Step text
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(60, 60, 60);
+          const stepLines = doc.splitTextToSize(step, pageWidth - 2 * margin - 15);
+          let lineY = yPosition;
+          stepLines.forEach((line: string, lineIdx: number) => {
+            checkPageBreak(5);
+            doc.text(line, margin + 12, lineY + 3);
+            lineY += 4.5;
+          });
+          yPosition = lineY + 5;
+        });
+        yPosition += 5;
+      }
+      
+      // Expansion Areas
+      const expansionAreas = guidance.expansion_areas || [];
+      if (expansionAreas.length > 0) {
+        checkPageBreak(40);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(139, 92, 246);
+        doc.text('Future Growth & Expansion Opportunities', margin, yPosition);
+        yPosition += 10;
+        
+        expansionAreas.forEach((area: string, index: number) => {
+          checkPageBreak(20);
+          
+          // Area marker
+          doc.setFillColor(245, 243, 255);
+          doc.roundedRect(margin, yPosition - 2, pageWidth - 2 * margin, 0, 2, 2, 'F');
+          
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(139, 92, 246);
+          doc.text(`▸`, margin + 2, yPosition + 2);
+          
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(60, 60, 60);
+          const areaLines = doc.splitTextToSize(area, pageWidth - 2 * margin - 12);
+          let lineY = yPosition;
+          areaLines.forEach((line: string) => {
+            checkPageBreak(5);
+            doc.text(line, margin + 8, lineY + 2);
+            lineY += 4.5;
+          });
+          yPosition = lineY + 7;
+        });
+      }
+    }
+  }
+
   // ============ SECTION: BUYER/DEPARTMENT INSIGHTS ============
   if (filters.includeSections.includes('buyerInsights')) {
     addNewPage();
@@ -528,7 +1018,7 @@ export const generatePDF = async (
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Deep insights into buyer behavior patterns and department preferences`, margin, yPosition);
+    doc.text('Deep insights into buyer behavior patterns and department preferences', margin, yPosition);
     yPosition += 12;
 
     // Organization Affinity
@@ -541,14 +1031,15 @@ export const generatePDF = async (
       yPosition += 8;
 
       orgAffinity.slice(0, 5).forEach((org, index) => {
-        checkPageBreak(20);
-        doc.setFillColor(245, 243, 255); // Light purple
-        doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 8, 1, 1, 'F');
+        checkPageBreak(25);
+        doc.setFillColor(245, 243, 255);
+        doc.roundedRect(margin, yPosition, pageWidth - 2 * margin, 0, 1, 1, 'F');
         
         doc.setFontSize(10);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(...colors.dark);
-        doc.text(`${index + 1}. ${org.org}`, margin + 3, yPosition + 5);
+        const orgName = org.org.length > 50 ? org.org.substring(0, 47) + '...' : org.org;
+        doc.text(`${index + 1}. ${orgName}`, margin + 3, yPosition + 5);
         yPosition += 10;
 
         doc.setFontSize(9);
@@ -557,12 +1048,12 @@ export const generatePDF = async (
         orgLines.forEach((line: string) => {
           checkPageBreak(5);
           doc.text(line, margin + 8, yPosition);
-          yPosition += 5;
+          yPosition += 4.5;
         });
-        yPosition += 3;
+        yPosition += 5;
       });
 
-      yPosition += 10;
+      yPosition += 5;
     }
 
     // Ministry Affinity
@@ -575,24 +1066,38 @@ export const generatePDF = async (
       doc.text('Ministry-Level Engagement Patterns', margin, yPosition);
       yPosition += 8;
 
-      const ministryData = ministryAffinity.slice(0, 8).map((ministry, index) => [
-        (index + 1).toString(),
-        ministry.ministry,
-        ministry.signal.substring(0, 80)
-      ]);
+      const ministryData = ministryAffinity.slice(0, 8).map((ministry, index) => {
+        const truncatedMinistry = ministry.ministry.length > 55 
+          ? ministry.ministry.substring(0, 52) + '...' 
+          : ministry.ministry;
+        const truncatedSignal = ministry.signal.length > 70 
+          ? ministry.signal.substring(0, 67) + '...' 
+          : ministry.signal;
+        return [
+          (index + 1).toString(),
+          truncatedMinistry,
+          truncatedSignal
+        ];
+      });
 
       autoTable(doc, {
         startY: yPosition,
         head: [['#', 'Ministry', 'Insight']],
         body: ministryData,
         theme: 'striped',
-        headStyles: { fillColor: colors.purple, textColor: [255, 255, 255], fontSize: 10, fontStyle: 'bold', halign: 'center' },
-        bodyStyles: { fontSize: 8 },
+        headStyles: { 
+          fillColor: colors.purple,
+          textColor: [255, 255, 255],
+          fontSize: 9,
+          fontStyle: 'bold',
+          halign: 'center'
+        },
+        bodyStyles: { fontSize: 8, cellPadding: 2 },
         alternateRowStyles: { fillColor: [245, 243, 255] },
         columnStyles: {
           0: { cellWidth: 10, halign: 'center' },
-          1: { cellWidth: 60, fontStyle: 'bold' },
-          2: { cellWidth: 115 },
+          1: { cellWidth: 65, fontStyle: 'bold' },
+          2: { cellWidth: 110 },
         },
         margin: { left: margin, right: margin },
       });
@@ -601,7 +1106,7 @@ export const generatePDF = async (
     }
 
     // Quantity and Price Patterns
-    checkPageBreak(60);
+    checkPageBreak(70);
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...colors.purple);
@@ -614,29 +1119,42 @@ export const generatePDF = async (
     if (quantityRanges.length > 0) {
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
+      doc.setTextColor(107, 70, 193);
       doc.text('Optimal Quantity Ranges:', margin, yPosition);
       yPosition += 6;
       
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
+      doc.setTextColor(60, 60, 60);
       quantityRanges.slice(0, 5).forEach(range => {
-        doc.text(`• ${range}`, margin + 5, yPosition);
-        yPosition += 5;
+        checkPageBreak(6);
+        const rangeLines = doc.splitTextToSize(`• ${range}`, pageWidth - 2 * margin - 10);
+        rangeLines.forEach((line: string) => {
+          doc.text(line, margin + 5, yPosition);
+          yPosition += 4.5;
+        });
       });
       yPosition += 5;
     }
 
     if (priceRanges.length > 0) {
+      checkPageBreak(40);
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
+      doc.setTextColor(107, 70, 193);
       doc.text('Successful Price Ranges:', margin, yPosition);
       yPosition += 6;
       
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
+      doc.setTextColor(60, 60, 60);
       priceRanges.slice(0, 5).forEach(range => {
-        doc.text(`• ${range}`, margin + 5, yPosition);
-        yPosition += 5;
+        checkPageBreak(6);
+        const rangeLines = doc.splitTextToSize(`• ${range}`, pageWidth - 2 * margin - 10);
+        rangeLines.forEach((line: string) => {
+          doc.text(line, margin + 5, yPosition);
+          yPosition += 4.5;
+        });
       });
     }
   }
